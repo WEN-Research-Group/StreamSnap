@@ -1,0 +1,183 @@
+/**
+ * Panel styling. GeoLibre injects a plugin's CSS globally, so every rule is
+ * scoped under `.streamsnap`. Colours are derived from `currentColor` so the
+ * panel follows the host's light and dark themes instead of fighting them.
+ */
+
+.streamsnap {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.streamsnap-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.streamsnap-section[hidden] {
+  display: none;
+}
+
+.streamsnap-section h3 {
+  margin: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.streamsnap-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.streamsnap-field[hidden] {
+  display: none;
+}
+
+.streamsnap-field > span {
+  opacity: 0.75;
+}
+
+.streamsnap-input {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 0.375rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.streamsnap-button {
+  padding: 0.4375rem 0.75rem;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 0.375rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.streamsnap-button:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.streamsnap-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.streamsnap-primary {
+  border-color: transparent;
+  background: #0f766e;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.streamsnap-primary:hover:not(:disabled) {
+  background: #115e59;
+}
+
+.streamsnap-status {
+  margin: 0;
+  opacity: 0.7;
+}
+
+.streamsnap-status:empty {
+  display: none;
+}
+
+.streamsnap-unmatched {
+  color: #e11d48;
+}
+
+.streamsnap-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.streamsnap-nav .streamsnap-button {
+  flex: 0 0 auto;
+}
+
+.streamsnap-position {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.streamsnap-site {
+  margin: 0;
+  font-weight: 600;
+}
+
+.streamsnap-match {
+  margin: 0;
+  opacity: 0.85;
+}
+
+/* Matches the selected-segment colour used on the map. */
+.streamsnap-manual::after {
+  content: "manual";
+  margin-inline-start: 0.5rem;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.625rem;
+  background: color-mix(in srgb, #e11d48 18%, transparent);
+  color: #e11d48;
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.streamsnap-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 18rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.streamsnap-candidate {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.3125rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.streamsnap-candidate:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.streamsnap-candidate.streamsnap-selected {
+  border-color: #e11d48;
+  background: color-mix(in srgb, #e11d48 12%, transparent);
+  font-weight: 600;
+}
+
+.streamsnap-distance {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.streamsnap-empty {
+  padding: 0.375rem 0.5rem;
+  opacity: 0.6;
+}

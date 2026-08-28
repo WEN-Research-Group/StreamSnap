@@ -1,0 +1,36 @@
+{
+  "name": "streamsnap",
+  "version": "0.1.0",
+  "description": "GeoLibre plugin for matching river monitoring sites to stream segments",
+  "type": "module",
+  "scripts": {
+    "build": "vite build --config vite.geolibre.config.ts",
+    "package:geolibre": "pnpm build && node scripts/package-geolibre-plugin.mjs",
+    "install:geolibre": "pnpm build && node scripts/install-geolibre-plugin.mjs",
+    "serve:geolibre": "node scripts/serve-geolibre-plugin.mjs",
+    "test": "vitest --run",
+    "lint": "eslint . --report-unused-disable-directives --max-warnings 0",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/geojson": "^7946.0.16",
+    "@types/node": "^25.9.2",
+    "@types/rbush": "^4.0.0",
+    "eslint": "^10.4.1",
+    "globals": "^17.6.0",
+    "maplibre-gl": "^5.24.0",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.60.1",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.8"
+  },
+  "private": true,
+  "dependencies": {
+    "@turf/nearest-point-on-line": "^7.4.0",
+    "rbush": "^4.0.1"
+  }
+}
