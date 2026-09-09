@@ -1,19 +1,3 @@
-/**
- * Site-to-segment matching and snapping.
- *
- * GeoLibre renders through MapLibre, so every workspace layer is WGS84 lon/lat.
- * Distances are therefore geodesic metres computed by Turf rather than degrees,
- * which keeps a radius meaningful at any latitude. The R-tree holds degree
- * bounding boxes only, as a conservative prefilter: a segment whose true
- * distance to a point is at most `r` always has a bounding box within `r` of
- * it, so widening the box by `r` never drops a real candidate.
- *
- * Two kinds of index appear here and must not be confused. `index` is a
- * position in the prepared `sites`/`segments` arrays and is the handle the UI
- * passes around; `featureIndex` is the row's position in the source layer, and
- * is what the match table records so its rows join back to the layers.
- */
-import RBush from "rbush";
 import { nearestPointOnLine } from "@turf/nearest-point-on-line";
 import type {
   Feature,
@@ -24,65 +8,47 @@ import type {
   Point,
   Position,
 } from "geojson";
+import RBush from "rbush";
 
-/**
- * A workspace layer's features. Geometry is nullable because GeoLibre loads a
- * delimited text file as an attribute table of null-geometry features.
- */
-export type VectorCollection = FeatureCollection<Geometry | null>;
-
-/** Metres per degree of latitude. */
-const METRES_PER_DEGREE = 111_320;
-
-/**
- * How far the automatic pass may widen its search before giving a site up.
- * Reached only by sites far off the network; the search doubles from the user's
- * radius, so a 500 m start gives up past ~256 km.
- */
-const MAX_SEARCH_RADIUS_M = 256_000;
-
-/** Sites processed between yields, so a large layer does not freeze the panel. */
-const AUTO_MATCH_CHUNK = 250;
-
-export type LineFeature = Feature<LineString | MultiLineString>;
+const METRES_PER_DEGREE = 111_000;
 
 export interface Site {
-  /** Position in the prepared sites array; what Previous/Next steps through. */
   index: number;
-  /** Position in the source sites layer. */
   featureIndex: number;
+  featureId: string | number | null;
   lngLat: [number, number];
   properties: Record<string, unknown>;
 }
 
 export interface Segment {
-  /** Position in the prepared segments array; the handle used for selection. */
   index: number;
-  /** Position in the source streams layer. */
   featureIndex: number;
-  feature: LineFeature;
+  properties: Record<string, unknown>;
+  feature: Feature<LineString | MultiLineString>;
+}
+
+export interface AttributeInfo {
+  name: string;
+  unique: boolean;
 }
 
 export interface Candidate {
   segmentIndex: number;
-  /** Distance from the site to the segment, in metres. */
   distance: number;
-  /** The point on the segment closest to the site. */
   snapped: [number, number];
-  /** Distance from the segment's start to the snapped point, in metres. */
-  along: number;
 }
 
-/** One row of `match_table`. Null throughout when no segment was in range. */
+export type PrimaryKeyValue = string | number;
+
 export interface MatchRow {
   site_index: number;
-  stream_index: number | null;
-  dist_m: number | null;
-  along_m: number | null;
+  automatic_stream_key: PrimaryKeyValue | null;
+  snapped_stream_index: number | null;
+  snapped_stream_key: PrimaryKeyValue | null;
+  snap_distance_m: number | null;
   snap_lng: number | null;
   snap_lat: number | null;
-  /** False for an automatic match, true once the user changes the selection. */
-  manual: boolean;
+  manual_revised: boolean;
 }
 
 interface IndexEntry {
@@ -93,45 +59,57 @@ interface IndexEntry {
   segmentIndex: number;
 }
 
-/**
- * Flatten a point collection into sites. Multi-point and null-geometry features
- * are skipped: a monitoring site is a single location, and an attribute-table
- * row has nothing to match.
- */
-export function prepareSites(collection: VectorCollection): Site[] {
+export function prepareSites(
+  features: ReadonlyArray<Feature<Geometry | null>>,
+): Site[] {
   const sites: Site[] = [];
-  collection.features.forEach((feature, featureIndex) => {
+  features.forEach((feature, featureIndex) => {
     if (feature.geometry?.type !== "Point") return;
-    const [lng, lat] = (feature.geometry as Point).coordinates;
+    const [lng, lat] = feature.geometry.coordinates;
     if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
 
     sites.push({
       index: sites.length,
       featureIndex,
+      featureId: feature.id ?? null,
       lngLat: [lng, lat],
-      properties: (feature.properties ?? {}) as Record<string, unknown>,
+      properties: feature.properties ?? {},
     });
   });
   return sites;
 }
 
-/** Flatten a line collection into matchable segments, one per feature. */
-export function prepareSegments(collection: VectorCollection): Segment[] {
+export function prepareSegments(
+  features: ReadonlyArray<Feature<Geometry | null>>,
+): Segment[] {
   const segments: Segment[] = [];
-  collection.features.forEach((feature, featureIndex) => {
+  features.forEach((feature, featureIndex) => {
     const type = feature.geometry?.type;
     if (type !== "LineString" && type !== "MultiLineString") return;
 
     segments.push({
       index: segments.length,
       featureIndex,
-      feature: feature as LineFeature,
+      properties: feature.properties ?? {},
+      feature: feature as Feature<LineString | MultiLineString>,
     });
   });
   return segments;
 }
 
-/** Spatial index over stream segments, supporting radius and nearest queries. */
+/** Attribute names plus whether every feature has a distinct string or integer value. */
+export function describeAttributes(
+  features: ReadonlyArray<{ properties: Record<string, unknown> }>,
+): AttributeInfo[] {
+  const names = new Set(
+    features.flatMap((feature) => Object.keys(feature.properties)),
+  );
+  return [...names].map((name) => ({
+    name,
+    unique: hasUniqueValues(features, name),
+  }));
+}
+
 export class SegmentIndex {
   private readonly tree = new RBush<IndexEntry>();
 
@@ -139,17 +117,15 @@ export class SegmentIndex {
     this.tree.load(segments.map(toIndexEntry));
   }
 
-  /**
-   * Every segment within `radius` metres of `lngLat`, nearest first. Exact: the
-   * bounding-box prefilter only over-selects, and each survivor is measured
-   * against the real geometry.
-   */
+  /** Segments within the radius, measured exactly and returned nearest first. */
   candidates(lngLat: [number, number], radius: number): Candidate[] {
     const [lng, lat] = lngLat;
     const dLat = radius / METRES_PER_DEGREE;
-    // Degrees of longitude shrink toward the poles; clamp so a near-polar site
-    // widens the box instead of dividing by ~0.
-    const dLng = radius / (METRES_PER_DEGREE * Math.max(Math.cos((lat * Math.PI) / 180), 0.01));
+    const latitudeScale = Math.abs(Math.cos((lat * Math.PI) / 180));
+    const dLng = Math.min(
+      180,
+      radius / (METRES_PER_DEGREE * Math.max(latitudeScale, 0.000001)),
+    );
 
     const found: Candidate[] = [];
     for (const entry of this.tree.search({
@@ -163,136 +139,123 @@ export class SegmentIndex {
     }
     return found.sort((a, b) => a.distance - b.distance);
   }
-
-  /**
-   * The single nearest segment, searching from `radius` and doubling until
-   * something is found. Exact for the same reason `candidates` is: if any
-   * segment lies within `r`, the closest of those beats everything outside `r`,
-   * so the first non-empty ring holds the global nearest.
-   */
-  nearest(lngLat: [number, number], radius: number): Candidate | null {
-    for (let search = radius; search <= MAX_SEARCH_RADIUS_M; search *= 2) {
-      const [best] = this.candidates(lngLat, search);
-      if (best) return best;
-    }
-    return null;
-  }
 }
 
-/**
- * Match every site to its nearest segment. Yields between chunks so the panel
- * stays responsive and can report progress.
- */
-export async function autoMatch(
-  sites: Site[],
-  segments: Segment[],
-  index: SegmentIndex,
-  radius: number,
-  onProgress?: (done: number, total: number) => void,
-): Promise<MatchRow[]> {
-  const rows: MatchRow[] = [];
-  for (const site of sites) {
-    rows.push(buildRow(site, segments, index.nearest(site.lngLat, radius), false));
-    if (rows.length % AUTO_MATCH_CHUNK === 0) {
-      onProgress?.(rows.length, sites.length);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-  }
-  onProgress?.(rows.length, sites.length);
-  return rows;
-}
-
-/** Re-point one site at a segment the user picked, flagging the row as manual. */
-export function manualMatch(site: Site, segments: Segment[], segmentIndex: number): MatchRow {
-  return buildRow(site, segments, measure(segments[segmentIndex], site.lngLat), true);
-}
-
-/** Recompute one site's automatic match, clearing its manual flag. */
-export function resetMatch(
+/** Match only the site currently being reviewed. */
+export function automaticMatch(
   site: Site,
   segments: Segment[],
-  index: SegmentIndex,
-  radius: number,
+  candidate: Candidate | null,
+  streamPrimaryKey: string,
 ): MatchRow {
-  return buildRow(site, segments, index.nearest(site.lngLat, radius), false);
+  const automaticStreamKey = candidate
+    ? primaryKeyValue(
+        segments[candidate.segmentIndex].properties[streamPrimaryKey],
+      )
+    : null;
+  return buildRow(
+    site,
+    segments,
+    candidate,
+    automaticStreamKey,
+    automaticStreamKey,
+  );
 }
 
-/**
- * `match_table` as a GeoLibre layer: one null-geometry feature per row, which
- * is how GeoLibre represents a non-spatial attribute table.
- */
-export function buildMatchTable(rows: MatchRow[]): FeatureCollection<null> {
+/** Select a candidate while comparing it with the retained automatic result. */
+export function manualMatch(
+  site: Site,
+  segments: Segment[],
+  candidate: Candidate,
+  automaticStreamKey: PrimaryKeyValue | null,
+  streamPrimaryKey: string,
+): MatchRow {
+  const snappedStreamKey = primaryKeyValue(
+    segments[candidate.segmentIndex].properties[streamPrimaryKey],
+  );
+  return buildRow(
+    site,
+    segments,
+    candidate,
+    automaticStreamKey,
+    snappedStreamKey,
+  );
+}
+
+/** Build the single finalized point layer, preserving source-site row order. */
+export function buildSnapped(
+  sites: Site[],
+  rows: MatchRow[],
+  sitePrimaryKey: string,
+): FeatureCollection<Point> {
   return {
     type: "FeatureCollection",
-    features: rows.map((row) => ({ type: "Feature", geometry: null, properties: { ...row } })),
+    features: sites.map((site) => {
+      const row = rows[site.index];
+      const coordinates: [number, number] =
+        row.snap_lng === null ? site.lngLat : [row.snap_lng, row.snap_lat!];
+
+      return {
+        type: "Feature",
+        id: site.featureId ?? site.featureIndex,
+        geometry: { type: "Point", coordinates },
+        properties: {
+          site_primary_key: site.properties[sitePrimaryKey] ?? null,
+          stream_primary_key: row.snapped_stream_key,
+          snapped_stream_index: row.snapped_stream_index,
+          snap_distance_m: row.snap_distance_m,
+          manual_revised: row.manual_revised,
+        },
+      };
+    }),
   };
-}
-
-/**
- * The `snapped` output: one point per matched site, placed on its segment and
- * carrying the site's own attributes alongside the match columns.
- */
-export function buildSnapped(sites: Site[], rows: MatchRow[]): FeatureCollection {
-  const features: Feature[] = [];
-
-  for (const site of sites) {
-    const row = rows[site.index];
-    if (!row || row.stream_index === null) continue;
-    features.push({
-      type: "Feature",
-      geometry: { type: "Point", coordinates: [row.snap_lng!, row.snap_lat!] },
-      properties: {
-        ...site.properties,
-        site_index: row.site_index,
-        stream_index: row.stream_index,
-        dist_m: row.dist_m,
-        along_m: row.along_m,
-        manual: row.manual,
-      },
-    });
-  }
-
-  return { type: "FeatureCollection", features };
 }
 
 function buildRow(
   site: Site,
   segments: Segment[],
   candidate: Candidate | null,
-  manual: boolean,
+  automaticStreamKey: PrimaryKeyValue | null,
+  snappedStreamKey: PrimaryKeyValue | null,
 ): MatchRow {
   if (!candidate) {
     return {
       site_index: site.featureIndex,
-      stream_index: null,
-      dist_m: null,
-      along_m: null,
+      automatic_stream_key: automaticStreamKey,
+      snapped_stream_index: null,
+      snapped_stream_key: null,
+      snap_distance_m: null,
       snap_lng: null,
       snap_lat: null,
-      manual,
+      manual_revised: false,
     };
   }
 
   return {
     site_index: site.featureIndex,
-    stream_index: segments[candidate.segmentIndex].featureIndex,
-    dist_m: round(candidate.distance),
-    along_m: round(candidate.along),
+    automatic_stream_key: automaticStreamKey,
+    snapped_stream_index: segments[candidate.segmentIndex].featureIndex,
+    snapped_stream_key: snappedStreamKey,
+    snap_distance_m: Math.round(candidate.distance * 100) / 100,
     snap_lng: candidate.snapped[0],
     snap_lat: candidate.snapped[1],
-    manual,
+    manual_revised: snappedStreamKey !== automaticStreamKey,
   };
 }
 
-/** Exact distance from a point to a segment, plus where on it the point lands. */
+function primaryKeyValue(value: unknown): PrimaryKeyValue | null {
+  return typeof value === "string" || typeof value === "number" ? value : null;
+}
+
 function measure(segment: Segment, lngLat: [number, number]): Candidate {
-  const snapped = nearestPointOnLine(segment.feature, lngLat, { units: "meters" });
+  const snapped = nearestPointOnLine(segment.feature, lngLat, {
+    units: "meters",
+  });
   const [lng, lat] = snapped.geometry.coordinates;
   return {
     segmentIndex: segment.index,
     distance: snapped.properties.pointDistance,
     snapped: [lng, lat],
-    along: snapped.properties.totalDistance,
   };
 }
 
@@ -301,22 +264,41 @@ function toIndexEntry(segment: Segment): IndexEntry {
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-
   const geometry = segment.feature.geometry;
   const parts: Position[][] =
-    geometry.type === "LineString" ? [geometry.coordinates] : geometry.coordinates;
+    geometry.type === "LineString"
+      ? [geometry.coordinates]
+      : geometry.coordinates;
+
   for (const part of parts) {
     for (const [lng, lat] of part) {
-      if (lng < minX) minX = lng;
-      if (lng > maxX) maxX = lng;
-      if (lat < minY) minY = lat;
-      if (lat > maxY) maxY = lat;
+      minX = Math.min(minX, lng);
+      minY = Math.min(minY, lat);
+      maxX = Math.max(maxX, lng);
+      maxY = Math.max(maxY, lat);
     }
   }
-
   return { minX, minY, maxX, maxY, segmentIndex: segment.index };
 }
 
-function round(value: number): number {
-  return Math.round(value * 100) / 100;
+function hasUniqueValues(
+  features: ReadonlyArray<{ properties: Record<string, unknown> }>,
+  name: string,
+): boolean {
+  if (!features.length) return false;
+  const values = new Set<string>();
+  for (const feature of features) {
+    const value = feature.properties[name];
+    if (
+      (typeof value !== "string" &&
+        (typeof value !== "number" || !Number.isInteger(value))) ||
+      value === ""
+    ) {
+      return false;
+    }
+    const key = `${typeof value}:${value}`;
+    if (values.has(key)) return false;
+    values.add(key);
+  }
+  return true;
 }

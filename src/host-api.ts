@@ -2,15 +2,13 @@
  * The slice of GeoLibre's host-plugin contract StreamSnap uses.
  *
  * The canonical definition lives in GeoLibre's `packages/plugins/src/types.ts`.
- * Only `addGeoJsonLayer` is guaranteed by every host build; the rest are typed
- * optional and must be called with optional chaining so the plugin degrades
- * instead of throwing on a host that predates a capability.
+ * StreamSnap targets the current GeoLibre internal plugin interface directly.
  *
  * `maplibre-gl` is imported for types only, so it never reaches the bundle
  * GeoLibre loads (the host owns the single MapLibre instance).
  */
 import type { Map as MapLibreMap } from "maplibre-gl";
-import type { FeatureCollection, Geometry } from "geojson";
+import type { Feature, FeatureCollection, Geometry } from "geojson";
 
 /**
  * Where a plugin right panel docks. `replace-style` shares one rail with the
@@ -38,6 +36,14 @@ export interface GeoLibreRightPanelRegistration {
   render: (container: HTMLElement) => void | (() => void);
 }
 
+export interface GeoLibreLayerSummary {
+  id: string;
+  name: string;
+  type: string;
+  visible: boolean;
+  opacity: number;
+}
+
 export interface GeoLibreAppAPI {
   /**
    * Register vector data as a first-class layer in the Layers panel. Geometry is
@@ -48,11 +54,13 @@ export interface GeoLibreAppAPI {
     data: FeatureCollection<Geometry | null>,
     sourcePath?: string,
   ) => string;
-  /** The host's MapLibre instance, or null before the map is ready. */
-  getMap?: () => MapLibreMap | null;
-  registerRightPanel?: (panel: GeoLibreRightPanelRegistration) => () => void;
-  openRightPanel?: (id: string) => boolean;
-  closeRightPanel?: (id: string) => void;
+  unregisterExternalNativeLayer: (id: string) => void;
+  listLayers: () => GeoLibreLayerSummary[];
+  getLayerFeatures: (id: string) => Feature<Geometry | null>[];
+  getMap: () => MapLibreMap;
+  registerRightPanel: (panel: GeoLibreRightPanelRegistration) => () => void;
+  openRightPanel: (id: string) => boolean;
+  closeRightPanel: (id: string) => void;
 }
 
 export interface GeoLibrePlugin {

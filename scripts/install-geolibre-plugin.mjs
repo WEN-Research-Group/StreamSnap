@@ -25,7 +25,9 @@ const targetDir = join(target.pluginsDir, manifest.id);
 await assertBuilt();
 await mkdir(target.pluginsDir, { recursive: true });
 await rm(targetDir, { recursive: true, force: true });
-await cp(bundleDir, targetDir, { recursive: true });
+await mkdir(targetDir, { recursive: true });
+await cp(manifestPath, join(targetDir, "plugin.json"));
+await cp(join(bundleDir, "dist"), join(targetDir, "dist"), { recursive: true });
 
 console.log(`Installed ${manifest.id}@${manifest.version} to ${targetDir}`);
 console.log(
@@ -79,7 +81,7 @@ function defaultDesktopPluginsDir() {
   return join(dataHome, appId, "plugins");
 }
 
-/** Ensure `npm run build:geolibre` has produced the full bundle before copying. */
+/** Ensure the build has produced the full bundle before copying. */
 async function assertBuilt() {
   const required = ["plugin.json", manifest.entry];
   if (manifest.style) required.push(manifest.style);
@@ -88,7 +90,7 @@ async function assertBuilt() {
       await stat(join(bundleDir, rel));
     } catch {
       throw new Error(
-        `Missing ${rel} in ${bundleDir}. Run "npm run build:geolibre" first.`,
+        `Missing ${rel} in ${bundleDir}. Run "pnpm build" first.`,
       );
     }
   }

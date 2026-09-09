@@ -1,13 +1,3 @@
-/**
- * The review overlay: the current site, the stream segments within the search
- * radius, and which one is matched.
- *
- * These layers are added straight to MapLibre rather than through
- * `registerExternalNativeLayer`, because they are transient review scaffolding
- * and should not appear in the Layers panel or be saved with the project. They
- * carry GeoLibre's `geolibre:internal` metadata flag so the host's own style
- * scans skip them.
- */
 import type { Feature, FeatureCollection, LineString } from "geojson";
 import type {
   GeoJSONSource,
@@ -21,35 +11,46 @@ const CANDIDATES_SOURCE = "streamsnap-candidates";
 const SELECTED_SOURCE = "streamsnap-selected";
 const LINK_SOURCE = "streamsnap-link";
 const SITE_SOURCE = "streamsnap-site";
-
-/** Wide transparent line under the candidates, so segments are easy to hit. */
 const HIT_LAYER = "streamsnap-candidates-hit";
-
+const SELECTED_LAYER = "streamsnap-selected-outline";
+const LINK_LAYER = "streamsnap-link-line";
+const SITE_LAYERS = ["streamsnap-site-halo", "streamsnap-site-dot"];
+const SOURCES = [CANDIDATES_SOURCE, SELECTED_SOURCE, LINK_SOURCE, SITE_SOURCE];
 const INTERNAL = { "geolibre:internal": true };
-
 const EMPTY: FeatureCollection = { type: "FeatureCollection", features: [] };
+const METRES_PER_DEGREE = 111_000;
+
+export interface SelectedSegmentStyle {
+  outlineColor: string;
+  outlineWidth: number;
+}
+
+export const DEFAULT_SELECTED_STYLE: SelectedSegmentStyle = {
+  outlineColor: "#facc15",
+  outlineWidth: 2,
+};
 
 export interface OverlayView {
   site: Site;
   segments: Segment[];
   candidates: Candidate[];
-  /** Position in the segments array, or null when the site has no match. */
   selectedIndex: number | null;
   snapped: [number, number] | null;
 }
 
+/** Transient review geometry; candidate segments remain visually unchanged. */
 export class MatchOverlay {
   private view: OverlayView | null = null;
+  private style = DEFAULT_SELECTED_STYLE;
 
   private readonly restyle = () => {
-    // A basemap change rebuilds the style and drops these layers with it. Guard
-    // on the layers actually being gone: `styledata` also fires for every
-    // `setData` below, and re-rendering on those would loop forever.
     if (this.view && !this.map.getLayer(HIT_LAYER)) this.render(this.view);
   };
 
   private readonly handleClick = (event: MapMouseEvent) => {
-    const feature = this.map.queryRenderedFeatures(event.point, { layers: [HIT_LAYER] })[0];
+    const feature = this.map.queryRenderedFeatures(event.point, {
+      layers: [HIT_LAYER],
+    })[0];
     const segmentIndex = feature?.properties?.segmentIndex;
     if (typeof segmentIndex === "number") this.onSelect(segmentIndex);
   };
@@ -76,35 +77,39 @@ export class MatchOverlay {
     this.view = view;
     this.ensureLayers();
 
-    const candidates: Feature[] = view.candidates.map((candidate) => ({
-      type: "Feature",
-      geometry: view.segments[candidate.segmentIndex].feature.geometry,
-      properties: { segmentIndex: candidate.segmentIndex },
-    }));
-
-    const selected =
+    this.setData(
+      CANDIDATES_SOURCE,
+      view.candidates.map((candidate) => ({
+        type: "Feature",
+        geometry: view.segments[candidate.segmentIndex].feature.geometry,
+        properties: { segmentIndex: candidate.segmentIndex },
+      })),
+    );
+    this.setData(
+      SELECTED_SOURCE,
       view.selectedIndex === null
         ? []
         : [
             {
-              type: "Feature" as const,
+              type: "Feature",
               geometry: view.segments[view.selectedIndex].feature.geometry,
               properties: {},
             },
-          ];
+          ],
+    );
 
     const link: Feature<LineString>[] = view.snapped
       ? [
           {
             type: "Feature",
-            geometry: { type: "LineString", coordinates: [view.site.lngLat, view.snapped] },
+            geometry: {
+              type: "LineString",
+              coordinates: [view.site.lngLat, view.snapped],
+            },
             properties: {},
           },
         ]
       : [];
-
-    this.setData(CANDIDATES_SOURCE, candidates);
-    this.setData(SELECTED_SOURCE, selected);
     this.setData(LINK_SOURCE, link);
     this.setData(SITE_SOURCE, [
       {
@@ -115,11 +120,16 @@ export class MatchOverlay {
     ]);
   }
 
+  setSelectedStyle(style: SelectedSegmentStyle): void {
+    this.style = style;
+    if (!this.map.getLayer(SELECTED_LAYER)) return;
+    this.map.setPaintProperty(SELECTED_LAYER, "line-color", style.outlineColor);
+    this.map.setPaintProperty(SELECTED_LAYER, "line-width", style.outlineWidth);
+  }
+
   clear(): void {
     this.view = null;
-    for (const source of [CANDIDATES_SOURCE, SELECTED_SOURCE, LINK_SOURCE, SITE_SOURCE]) {
-      this.setData(source, []);
-    }
+    for (const source of SOURCES) this.setData(source, []);
   }
 
   destroy(): void {
@@ -131,44 +141,42 @@ export class MatchOverlay {
 
     for (const layer of [
       HIT_LAYER,
-      "streamsnap-candidates-line",
-      "streamsnap-selected-line",
-      "streamsnap-link-line",
-      "streamsnap-site-halo",
-      "streamsnap-site-dot",
+      SELECTED_LAYER,
+      LINK_LAYER,
+      ...SITE_LAYERS,
     ]) {
       if (this.map.getLayer(layer)) this.map.removeLayer(layer);
     }
-    for (const source of [CANDIDATES_SOURCE, SELECTED_SOURCE, LINK_SOURCE, SITE_SOURCE]) {
+    for (const source of SOURCES) {
       if (this.map.getSource(source)) this.map.removeSource(source);
     }
   }
 
-  /** Bounding box covering the site and everything drawn around it. */
-  static boundsFor(view: OverlayView): [number, number, number, number] {
-    let [minX, minY] = view.site.lngLat;
-    let [maxX, maxY] = view.site.lngLat;
-
-    const extend = (lng: number, lat: number) => {
-      minX = Math.min(minX, lng);
-      maxX = Math.max(maxX, lng);
-      minY = Math.min(minY, lat);
-      maxY = Math.max(maxY, lat);
-    };
-
-    for (const candidate of view.candidates) extend(...candidate.snapped);
-    if (view.snapped) extend(...view.snapped);
-    return [minX, minY, maxX, maxY];
+  static radiusBounds(
+    [lng, lat]: [number, number],
+    radius: number,
+  ): [number, number, number, number] {
+    const dLat = radius / METRES_PER_DEGREE;
+    const dLng = Math.min(
+      180,
+      radius /
+        (METRES_PER_DEGREE *
+          Math.max(Math.abs(Math.cos((lat * Math.PI) / 180)), 0.000001)),
+    );
+    return [lng - dLng, lat - dLat, lng + dLng, lat + dLat];
   }
 
   private setData(sourceId: string, features: Feature[]): void {
-    const source = this.map.getSource<GeoJSONSource>(sourceId);
-    source?.setData({ type: "FeatureCollection", features });
+    this.map
+      .getSource<GeoJSONSource>(sourceId)
+      ?.setData({ type: "FeatureCollection", features });
   }
 
   private ensureLayers(): void {
-    for (const id of [CANDIDATES_SOURCE, SELECTED_SOURCE, LINK_SOURCE, SITE_SOURCE]) {
-      if (!this.map.getSource(id)) this.map.addSource(id, { type: "geojson", data: EMPTY });
+    for (const id of SOURCES) {
+      if (!this.map.getSource(id)) {
+        this.map.addSource(id, { type: "geojson", data: EMPTY });
+      }
     }
 
     this.addLayer({
@@ -178,31 +186,37 @@ export class MatchOverlay {
       paint: { "line-width": 18, "line-opacity": 0 },
     });
     this.addLayer({
-      id: "streamsnap-candidates-line",
-      type: "line",
-      source: CANDIDATES_SOURCE,
-      paint: { "line-color": "#f59e0b", "line-width": 3 },
-    });
-    this.addLayer({
-      id: "streamsnap-selected-line",
+      id: SELECTED_LAYER,
       type: "line",
       source: SELECTED_SOURCE,
-      paint: { "line-color": "#e11d48", "line-width": 5 },
+      paint: {
+        "line-color": this.style.outlineColor,
+        "line-width": this.style.outlineWidth,
+        "line-gap-width": 2.5,
+      },
     });
     this.addLayer({
-      id: "streamsnap-link-line",
+      id: LINK_LAYER,
       type: "line",
       source: LINK_SOURCE,
-      paint: { "line-color": "#111827", "line-width": 1.5, "line-dasharray": [2, 2] },
+      paint: {
+        "line-color": "#64748b",
+        "line-width": 1.5,
+        "line-dasharray": [2, 2],
+      },
     });
     this.addLayer({
-      id: "streamsnap-site-halo",
+      id: SITE_LAYERS[0],
       type: "circle",
       source: SITE_SOURCE,
-      paint: { "circle-radius": 9, "circle-color": "#ffffff", "circle-opacity": 0.9 },
+      paint: {
+        "circle-radius": 9,
+        "circle-color": "#ffffff",
+        "circle-opacity": 0.9,
+      },
     });
     this.addLayer({
-      id: "streamsnap-site-dot",
+      id: SITE_LAYERS[1],
       type: "circle",
       source: SITE_SOURCE,
       paint: { "circle-radius": 4.5, "circle-color": "#111827" },
@@ -210,7 +224,8 @@ export class MatchOverlay {
   }
 
   private addLayer(layer: LayerSpecification): void {
-    if (this.map.getLayer(layer.id)) return;
-    this.map.addLayer({ ...layer, metadata: INTERNAL });
+    if (!this.map.getLayer(layer.id)) {
+      this.map.addLayer({ ...layer, metadata: INTERNAL });
+    }
   }
 }
