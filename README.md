@@ -3,7 +3,7 @@
 StreamSnap is a [GeoLibre](https://geolibre.app/) plugin for interactively matching river-monitoring sites to
 stream segments and creating snapped site points.
 
-![ Demo ](Demo.png)
+![ Demo ](assets/Demo.png)
 
 > [!WARNING]
 > This project is built with intensive agentic programming and should be considered as experimental.
@@ -25,7 +25,7 @@ GeoLibre exposes workspace vectors in WGS84. StreamSnap therefore uses geodesic 
 instead of exposing a CRS-dependent degree value.
 
 ## Example Data
-Use [`sample_sites.parquet`](./sample_sites.parquet) in this repo and [NHDPlus V2 stream segments](https://services.arcgis.com/P3ePLMYs2RVChkJx/ArcGIS/rest/services/NHDPlusV21/FeatureServer/2).
+Use [`sample_sites.parquet`](./assets/sample_sites.parquet) in this repo and [NHDPlus V2 stream segments](https://services.arcgis.com/P3ePLMYs2RVChkJx/ArcGIS/rest/services/NHDPlusV21/FeatureServer/2).
 
 ## Output
 

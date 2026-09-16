@@ -42,7 +42,7 @@ jobs:
         run: pnpm check
 
       - name: Package plugin
-        run: node scripts/package-geolibre-plugin.mjs
+        run: pnpm package:geolibre
 
       - name: Commit version and bundle
         run: |
