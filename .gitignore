@@ -12,7 +12,6 @@ node_modules
 dist
 dist-ssr
 *.local
-geolibre-plugin/dist/
 geolibre-plugin/*.zip
 
 # Editor directories and files
@@ -32,6 +31,8 @@ coverage
 # Build
 dist/
 dist-examples/
+!geolibre-plugin/dist/
+!geolibre-plugin/dist/**
 
 # Environment
 .env

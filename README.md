@@ -63,3 +63,12 @@ pnpm package:geolibre
 to create a `geolibre-plugin/streamsnap-<version>.zip`, which can be installed with **Install from
 file**. `pnpm install:geolibre` builds and copies the unpacked bundle to GeoLibre Desktop's default
 app-data plugin directory.
+
+## Release
+
+Create and push a `v<major>.<minor>.<patch>` tag, for example:
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```

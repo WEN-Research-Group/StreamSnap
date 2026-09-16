@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          jq --arg version "$VERSION" '.version = $version' \
+            geolibre-plugin/plugin.json > "$RUNNER_TEMP/plugin.json"
+          mv "$RUNNER_TEMP/plugin.json" geolibre-plugin/plugin.json
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Check and build
+        run: pnpm check
+
+      - name: Package plugin
+        run: node scripts/package-geolibre-plugin.mjs
+
+      - name: Commit version and bundle
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json geolibre-plugin/plugin.json geolibre-plugin/dist
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: release $GITHUB_REF_NAME"
+            git push origin HEAD:main
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          "geolibre-plugin/streamsnap-$VERSION.zip"
+          --verify-tag
+          --generate-notes
