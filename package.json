@@ -1,6 +1,6 @@
 {
   "name": "streamsnap",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "GeoLibre plugin for matching river monitoring sites to stream segments",
   "type": "module",
   "scripts": {
