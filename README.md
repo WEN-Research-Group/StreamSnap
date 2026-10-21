@@ -25,7 +25,7 @@ GeoLibre exposes workspace vectors in WGS84. StreamSnap therefore uses geodesic 
 instead of exposing a CRS-dependent degree value.
 
 ## Example Data
-Use [`sample_sites.parquet`](./assets/sample_sites.parquet) in this repo and [NHDPlus V2 stream segments](https://services.arcgis.com/P3ePLMYs2RVChkJx/ArcGIS/rest/services/NHDPlusV21/FeatureServer/2).
+Use [`sample_sites.parquet`](./assets/sample_sites.parquet) in this repo and [NHDPlus V2 stream segments](https://services5.arcgis.com/7weheFjxuNkGGiZi/ArcGIS/rest/services/National_Hydrography_Dataset_Plus_Medium_Resolution/FeatureServer/2).
 
 ## Output
 
