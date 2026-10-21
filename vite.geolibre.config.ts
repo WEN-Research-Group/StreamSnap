@@ -20,10 +20,11 @@ export default defineConfig({
     },
     outDir: "geolibre-plugin/dist",
     cssCodeSplit: false,
-    minify: false,
-    rollupOptions: {
+    rolldownOptions: {
       output: {
         assetFileNames: "style.css",
+        minify: true,
+        comments: { legal: true },
       },
     },
   },
