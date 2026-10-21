@@ -130,6 +130,7 @@ function createMap(): TestMap {
       for (const listener of listeners.get(event) ?? []) listener();
     },
     getSource: (id: string) => sources.get(id),
+    getStyle: () => ({ layers: [] }),
     addSource: (id: string) => {
       sources.set(id, source());
     },

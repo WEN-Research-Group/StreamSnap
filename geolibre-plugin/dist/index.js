@@ -1,15 +1,98 @@
+//#region src/segment-highlight.ts
+/** Paint the selection in the stream's existing line layers. */
+var SegmentHighlight = class {
+	map;
+	selection = null;
+	color = "#facc15";
+	width = 2;
+	updating = false;
+	overrides = /* @__PURE__ */ new Map();
+	constructor(map) {
+		this.map = map;
+		map.on("styledata", this.sync);
+	}
+	select(layerId, key, value) {
+		if (value == null || this.selection?.layerId !== layerId) this.clear();
+		this.selection = value == null ? null : {
+			layerId,
+			key,
+			value
+		};
+		this.sync();
+	}
+	setStyle(color, width) {
+		this.color = color;
+		this.width = width;
+		this.sync();
+	}
+	clear() {
+		this.selection = null;
+		for (const { id, property, original, applied } of this.overrides.values()) if (this.map.getLayer(id) && equal(this.map.getPaintProperty(id, property), applied)) this.map.setPaintProperty(id, property, original ?? null);
+		this.overrides.clear();
+	}
+	destroy() {
+		this.map.off("styledata", this.sync);
+		this.clear();
+	}
+	sync = () => {
+		if (!this.selection || this.updating) return;
+		const { layerId, key, value } = this.selection;
+		const condition = [
+			"==",
+			["get", key],
+			["literal", value]
+		];
+		this.updating = true;
+		try {
+			for (const layer of this.map.getStyle().layers) {
+				if (layer.type !== "line" || layer.source !== `source-${layerId}` && layer.source !== `${layerId}-source`) continue;
+				for (const property of ["line-color", "line-width"]) {
+					const id = layer.id;
+					const overrideKey = `${id}/${property}`;
+					const current = this.map.getPaintProperty(id, property);
+					const saved = this.overrides.get(overrideKey);
+					const original = saved && equal(current, saved.applied) ? saved.original : current;
+					const color = property === "line-color";
+					const applied = selectedPaint(original ?? (color ? "#000000" : 1), condition, color ? this.color : this.width);
+					this.overrides.set(overrideKey, {
+						id,
+						property,
+						original,
+						applied
+					});
+					if (!equal(current, applied)) this.map.setPaintProperty(id, property, applied);
+				}
+			}
+		} finally {
+			this.updating = false;
+		}
+	};
+};
+function equal(a, b) {
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+function selectedPaint(base, condition, value) {
+	if (Array.isArray(base)) {
+		const inputIndex = base[0] === "step" ? 1 : 2;
+		if (equal(base[inputIndex], ["zoom"])) return base.map((part, i) => i > inputIndex && i % 2 === 0 ? selectedPaint(part, condition, value) : part);
+	}
+	return [
+		"case",
+		condition,
+		value,
+		base
+	];
+}
+//#endregion
 //#region src/overlay.ts
 var CANDIDATES_SOURCE = "streamsnap-candidates";
-var SELECTED_SOURCE = "streamsnap-selected";
 var LINK_SOURCE = "streamsnap-link";
 var SITE_SOURCE = "streamsnap-site";
 var HIT_LAYER = "streamsnap-candidates-hit";
-var SELECTED_LAYER = "streamsnap-selected-outline";
 var LINK_LAYER = "streamsnap-link-line";
 var SITE_LAYERS = ["streamsnap-site-halo", "streamsnap-site-dot"];
 var SOURCES = [
 	CANDIDATES_SOURCE,
-	SELECTED_SOURCE,
 	LINK_SOURCE,
 	SITE_SOURCE
 ];
@@ -28,7 +111,7 @@ var MatchOverlay = class {
 	map;
 	onSelect;
 	view = null;
-	style = DEFAULT_SELECTED_STYLE;
+	highlight;
 	restyle = () => {
 		if (this.view && !this.map.getLayer(HIT_LAYER)) this.render(this.view);
 	};
@@ -45,6 +128,7 @@ var MatchOverlay = class {
 	constructor(map, onSelect) {
 		this.map = map;
 		this.onSelect = onSelect;
+		this.highlight = new SegmentHighlight(map);
 		this.map.on("styledata", this.restyle);
 		this.map.on("click", HIT_LAYER, this.handleClick);
 		this.map.on("mouseenter", HIT_LAYER, this.handleEnter);
@@ -58,11 +142,7 @@ var MatchOverlay = class {
 			geometry: view.segments[candidate.segmentIndex].feature.geometry,
 			properties: { segmentIndex: candidate.segmentIndex }
 		})));
-		this.setData(SELECTED_SOURCE, view.selectedIndex === null ? [] : [{
-			type: "Feature",
-			geometry: view.segments[view.selectedIndex].feature.geometry,
-			properties: {}
-		}]);
+		this.highlight.select(view.streamLayerId, view.streamPrimaryKey, view.selectedIndex === null ? null : view.segments[view.selectedIndex].properties[view.streamPrimaryKey]);
 		const link = view.snapped ? [{
 			type: "Feature",
 			geometry: {
@@ -82,16 +162,15 @@ var MatchOverlay = class {
 		}]);
 	}
 	setSelectedStyle(style) {
-		this.style = style;
-		if (!this.map.getLayer(SELECTED_LAYER)) return;
-		this.map.setPaintProperty(SELECTED_LAYER, "line-color", style.outlineColor);
-		this.map.setPaintProperty(SELECTED_LAYER, "line-width", style.outlineWidth);
+		this.highlight.setStyle(style.outlineColor, style.outlineWidth);
 	}
 	clear() {
 		this.view = null;
+		this.highlight.clear();
 		for (const source of SOURCES) this.setData(source, []);
 	}
 	destroy() {
+		this.highlight.destroy();
 		this.map.off("styledata", this.restyle);
 		this.map.off("click", HIT_LAYER, this.handleClick);
 		this.map.off("mouseenter", HIT_LAYER, this.handleEnter);
@@ -99,7 +178,6 @@ var MatchOverlay = class {
 		this.map.getCanvas().style.cursor = "";
 		for (const layer of [
 			HIT_LAYER,
-			SELECTED_LAYER,
 			LINK_LAYER,
 			...SITE_LAYERS
 		]) if (this.map.getLayer(layer)) this.map.removeLayer(layer);
@@ -133,16 +211,6 @@ var MatchOverlay = class {
 			paint: {
 				"line-width": 18,
 				"line-opacity": 0
-			}
-		});
-		this.addLayer({
-			id: SELECTED_LAYER,
-			type: "line",
-			source: SELECTED_SOURCE,
-			paint: {
-				"line-color": this.style.outlineColor,
-				"line-width": this.style.outlineWidth,
-				"line-gap-width": 2.5
 			}
 		});
 		this.addLayer({
@@ -1390,6 +1458,8 @@ var StreamSnapController = class {
 		const row = this.rows[this.current];
 		const selectedIndex = row?.snapped_stream_key === null || row?.snapped_stream_key === void 0 ? null : this.segmentByKey.get(row.snapped_stream_key) ?? null;
 		const view = {
+			streamLayerId: this.config.streams.id,
+			streamPrimaryKey: this.config.streams.primaryKey,
 			site,
 			segments: this.segments,
 			candidates: this.candidates,
@@ -1487,7 +1557,7 @@ function renderPanel(container, controller) {
 	outlineColor.type = "color";
 	outlineColor.className = "streamsnap-input streamsnap-color-input";
 	const outlineWidth = numberInput(2, .5, .5);
-	styleSection.append(field("Outline color", outlineColor), field("Outline width (px)", outlineWidth));
+	styleSection.append(field("Highlight color", outlineColor), field("Highlight width (px)", outlineWidth));
 	const finalizeSection = reviewSection("Finalize");
 	const matchedSummary = document.createElement("p");
 	matchedSummary.className = "streamsnap-summary streamsnap-tabular";
@@ -1781,7 +1851,7 @@ function formatMetres(value) {
 //#region geolibre-plugin/plugin.json
 var id = "streamsnap";
 var name = "StreamSnap";
-var version = "0.1.1";
+var version = "0.1.2";
 //#endregion
 //#region src/geolibre.ts
 /**

@@ -71,8 +71,8 @@ export function renderPanel(
   outlineColor.className = "streamsnap-input streamsnap-color-input";
   const outlineWidth = numberInput(2, 0.5, 0.5);
   styleSection.append(
-    field("Outline color", outlineColor),
-    field("Outline width (px)", outlineWidth),
+    field("Highlight color", outlineColor),
+    field("Highlight width (px)", outlineWidth),
   );
 
   const finalizeSection = reviewSection("Finalize");

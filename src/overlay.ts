@@ -6,16 +6,15 @@ import type {
   MapMouseEvent,
 } from "maplibre-gl";
 import type { Candidate, Segment, Site } from "./matching";
+import { SegmentHighlight } from "./segment-highlight";
 
 const CANDIDATES_SOURCE = "streamsnap-candidates";
-const SELECTED_SOURCE = "streamsnap-selected";
 const LINK_SOURCE = "streamsnap-link";
 const SITE_SOURCE = "streamsnap-site";
 const HIT_LAYER = "streamsnap-candidates-hit";
-const SELECTED_LAYER = "streamsnap-selected-outline";
 const LINK_LAYER = "streamsnap-link-line";
 const SITE_LAYERS = ["streamsnap-site-halo", "streamsnap-site-dot"];
-const SOURCES = [CANDIDATES_SOURCE, SELECTED_SOURCE, LINK_SOURCE, SITE_SOURCE];
+const SOURCES = [CANDIDATES_SOURCE, LINK_SOURCE, SITE_SOURCE];
 const INTERNAL = { "geolibre:internal": true };
 const EMPTY: FeatureCollection = { type: "FeatureCollection", features: [] };
 const METRES_PER_DEGREE = 111_000;
@@ -31,6 +30,8 @@ export const DEFAULT_SELECTED_STYLE: SelectedSegmentStyle = {
 };
 
 export interface OverlayView {
+  streamLayerId: string;
+  streamPrimaryKey: string;
   site: Site;
   segments: Segment[];
   candidates: Candidate[];
@@ -41,7 +42,7 @@ export interface OverlayView {
 /** Transient review geometry; candidate segments remain visually unchanged. */
 export class MatchOverlay {
   private view: OverlayView | null = null;
-  private style = DEFAULT_SELECTED_STYLE;
+  private readonly highlight: SegmentHighlight;
 
   private readonly restyle = () => {
     if (this.view && !this.map.getLayer(HIT_LAYER)) this.render(this.view);
@@ -67,6 +68,7 @@ export class MatchOverlay {
     private readonly map: MapLibreMap,
     private readonly onSelect: (segmentIndex: number) => void,
   ) {
+    this.highlight = new SegmentHighlight(map);
     this.map.on("styledata", this.restyle);
     this.map.on("click", HIT_LAYER, this.handleClick);
     this.map.on("mouseenter", HIT_LAYER, this.handleEnter);
@@ -85,17 +87,12 @@ export class MatchOverlay {
         properties: { segmentIndex: candidate.segmentIndex },
       })),
     );
-    this.setData(
-      SELECTED_SOURCE,
+    this.highlight.select(
+      view.streamLayerId,
+      view.streamPrimaryKey,
       view.selectedIndex === null
-        ? []
-        : [
-            {
-              type: "Feature",
-              geometry: view.segments[view.selectedIndex].feature.geometry,
-              properties: {},
-            },
-          ],
+        ? null
+        : view.segments[view.selectedIndex].properties[view.streamPrimaryKey],
     );
 
     const link: Feature<LineString>[] = view.snapped
@@ -121,30 +118,24 @@ export class MatchOverlay {
   }
 
   setSelectedStyle(style: SelectedSegmentStyle): void {
-    this.style = style;
-    if (!this.map.getLayer(SELECTED_LAYER)) return;
-    this.map.setPaintProperty(SELECTED_LAYER, "line-color", style.outlineColor);
-    this.map.setPaintProperty(SELECTED_LAYER, "line-width", style.outlineWidth);
+    this.highlight.setStyle(style.outlineColor, style.outlineWidth);
   }
 
   clear(): void {
     this.view = null;
+    this.highlight.clear();
     for (const source of SOURCES) this.setData(source, []);
   }
 
   destroy(): void {
+    this.highlight.destroy();
     this.map.off("styledata", this.restyle);
     this.map.off("click", HIT_LAYER, this.handleClick);
     this.map.off("mouseenter", HIT_LAYER, this.handleEnter);
     this.map.off("mouseleave", HIT_LAYER, this.handleLeave);
     this.map.getCanvas().style.cursor = "";
 
-    for (const layer of [
-      HIT_LAYER,
-      SELECTED_LAYER,
-      LINK_LAYER,
-      ...SITE_LAYERS,
-    ]) {
+    for (const layer of [HIT_LAYER, LINK_LAYER, ...SITE_LAYERS]) {
       if (this.map.getLayer(layer)) this.map.removeLayer(layer);
     }
     for (const source of SOURCES) {
@@ -184,16 +175,6 @@ export class MatchOverlay {
       type: "line",
       source: CANDIDATES_SOURCE,
       paint: { "line-width": 18, "line-opacity": 0 },
-    });
-    this.addLayer({
-      id: SELECTED_LAYER,
-      type: "line",
-      source: SELECTED_SOURCE,
-      paint: {
-        "line-color": this.style.outlineColor,
-        "line-width": this.style.outlineWidth,
-        "line-gap-width": 2.5,
-      },
     });
     this.addLayer({
       id: LINK_LAYER,

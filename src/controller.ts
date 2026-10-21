@@ -428,6 +428,8 @@ export class StreamSnapController {
         ? null
         : (this.segmentByKey.get(row.snapped_stream_key) ?? null);
     const view: OverlayView = {
+      streamLayerId: this.config.streams.id!,
+      streamPrimaryKey: this.config.streams.primaryKey!,
       site,
       segments: this.segments,
       candidates: this.candidates,
